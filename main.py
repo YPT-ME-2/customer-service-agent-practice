@@ -1,6 +1,6 @@
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException,Path
 
 from pydantic import BaseModel, Field
 
@@ -12,9 +12,30 @@ from fastapi.responses import StreamingResponse
 from app.core.logger import get_logger
 from app.services.conversation_service import ConversationService
 
+from contextlib import asynccontextmanager
+from app.core.database import Base, engine
+from app.models.conversation import Conversation
+
 logger=get_logger("api")
 
-app=FastAPI(title="客服 Agent 练习")
+@asynccontextmanager
+async def lifespan(app:FastAPI):
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+
+        logger.info("数据库表已准备好")
+
+        yield
+    finally:
+        # 关闭时：释放数据库连接资源
+        await engine.dispose()
+
+# app=FastAPI(title="客服 Agent 练习")
+app=FastAPI(
+    title="客服 Agent 练习",
+    lifespan=lifespan,
+)
 # chat_service=OllamaService()
 chat_service=LLMFactory.create_chat_service()
 
@@ -85,7 +106,7 @@ async def conversation_chat(request:ConversationChatRequest):
             detail="问题不能只包含空白"
         )
 
-    messages=conversation_service.get_history(
+    messages=await conversation_service.get_history(
         request.conversation_id
     )
 
@@ -115,7 +136,7 @@ async def conversation_chat(request:ConversationChatRequest):
             detail="模型未返回有效回答",
         )
 
-    conversation_service.save_turn(
+    await conversation_service.save_turn(
         request.conversation_id,
         question,
         answer,
@@ -123,4 +144,96 @@ async def conversation_chat(request:ConversationChatRequest):
     return {
         "conversation_id": request.conversation_id,
         "answer": answer,
+    }
+
+@app.get("/api/conversations/{conversation_id}/messages")
+async def get_conversation_messages(
+    conversation_id:str=Path(
+        ...,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    ),
+):
+    messages=await conversation_service.get_history(
+        conversation_id,
+    )
+    return {
+        "conversation_id": conversation_id,
+        "messages": messages,
+    }
+
+@app.delete("/api/conversations/{conversation_id}/messages")
+async def clear_conversation_messages(
+    conversation_id:str=Path(
+        ...,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    ),
+):
+    await conversation_service.clear_history(conversation_id)
+    return {
+        "conversation_id": conversation_id,
+        "message": "该会话的消息已清空",
+    }
+
+# @app.get("/api/conversations")
+# async def list_conversations():
+#     conversation_ids=await conversation_service.list_conversations()
+#     return {
+#         "conversation_ids":conversation_ids,
+#     }
+
+@app.get("/api/conversations")
+async def list_conversations():
+    conversations = await conversation_service.list_conversations()
+
+    return {"conversations": conversations}
+
+class CreateConversationRequest(BaseModel):
+    title:str=Field(default="新会话", min_length=1, max_length=100)
+
+@app.post("/api/conversations")
+async def create_conversation(request:CreateConversationRequest):
+    title=request.title.strip()
+    if not title:
+        raise HTTPException(
+            status_code=422,
+            detail="标题不能只包含空白",
+        )
+    return await conversation_service.create_conversation(title)
+
+
+class RenameConversationRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=100)
+
+@app.patch("/api/conversations/{conversation_id}/title")
+async def rename_conversation(
+    request:RenameConversationRequest,
+    conversation_id:str=Path(
+        ...,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    ),
+):
+    title=request.title.strip()
+    if not title:
+        raise HTTPException(
+            status_code=422,
+            detail="标题不能只包含空白",
+        )
+    updated=await conversation_service.rename_conversation(
+        conversation_id,
+        title,
+    )
+    if not updated:
+        raise HTTPException(
+            status_code=404,
+            detail="会话不存在",
+        )
+    return {
+        "id": conversation_id,
+        "title": title,
     }
