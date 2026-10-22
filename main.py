@@ -20,6 +20,8 @@ from app.core.config import ROOT_DIR
 from app.services.knowledge_service import KnowledgeService
 from app.services.rag_service import RagService
 from uuid import uuid4
+import asyncio
+
 logger=get_logger("api")
 
 @asynccontextmanager
@@ -296,47 +298,71 @@ async def rag_chat(request: RagChatRequest):
 async def upload_knowledge(file: UploadFile = File(...)):
     filename = file.filename or ""
     # 最多读取 2MB 加一个字节，用来判断是否超限
-    max_size = 2 * 1024 * 1024
+    lower_name=filename.lower()
+    if lower_name.endswith(".txt"):
+        suffidx=".txt"
+    elif lower_name.endswith(".pdf"):
+        suffidx=".pdf"
+    else:
+        await file.close()
+        raise HTTPException(
+            status_code=422,
+            detail="当前只支持 TXT 和 PDF",
+        )
+
+    max_size = 10 * 1024 * 1024
     try:
         content=await file.read(max_size+1)
     finally:
         await file.close()
 
-    if not filename.lower().endswith(".txt"):
-        raise HTTPException(
-            status_code=422,
-            detail="当前只支持 TXT 文件",
-        )
+    # if not filename.lower().endswith(".txt"):
+    #     raise HTTPException(
+    #         status_code=422,
+    #         detail="当前只支持 TXT 文件",
+    #     )
     if len(content)>max_size:
         raise HTTPException(
             status_code=413,
-            detail="文件不能超过 2MB",
+            detail="文件不能超过 10MB",
         )
-
-    try:
-        text=content.decode("utf-8-sig")
-    except UnicodeDecodeError:
+    if not content:
         raise HTTPException(
             status_code=422,
-            detail="请将文件保存为 UTF-8 编码后上传",
+            detail="文件不能为空",
         )
 
-    if not text.strip():
-        raise HTTPException(
-            status_code=422,
-            detail="文件内容不能为空",
-        )
+    # try:
+    #     text=content.decode("utf-8-sig")
+    # except UnicodeDecodeError:
+    #     raise HTTPException(
+    #         status_code=422,
+    #         detail="请将文件保存为 UTF-8 编码后上传",
+    #     )
+
+    # if not text.strip():
+    #     raise HTTPException(
+    #         status_code=422,
+    #         detail="文件内容不能为空",
+    #     )
 
     upload_dir=ROOT_DIR/"uploads"
     upload_dir.mkdir(exist_ok=True)
     # 使用服务器生成的文件名，避免同名覆盖
-    filepath=upload_dir / f"{uuid4().hex}.txt"
+    # filepath=upload_dir / f"{uuid4().hex}.txt"
+    filepath=upload_dir/f"{uuid4().hex}{suffidx}"
 
     try:
-        filepath.write_text(text,encoding="utf-8")
+        # filepath.write_text(text,encoding="utf-8")
+        await asyncio.to_thread(filepath.write_bytes, content)
         count = await knowledge_service.load_file(
             filepath,
             source_name=filename,
+        )
+    except (ValueError, UnicodeDecodeError) as e:
+        raise HTTPException(
+            status_code=422,
+            detail=str(e),
         )
     except Exception:
         logger.exception("上传资料建库失败")

@@ -7,6 +7,9 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.core.config import settings
 
+import asyncio
+from pypdf import PdfReader
+
 class KnowledgeService:
     def __init__(self):
         self.embedding=OllamaEmbeddings(
@@ -28,16 +31,12 @@ class KnowledgeService:
             filepath:Path,
             source_name:str|None=None,
             )->int:
-        text=filepath.read_text(encoding="utf-8")
-
-        if not text.strip():
-            raise ValueError("知识文件内容为空")
-        document=Document(
-            page_content=text,
-            # metadata={"source": filepath.name},
-            metadata={"source": source_name or filepath.name}
+        documents = await asyncio.to_thread(
+            self._read_documents,
+            filepath,
+            source_name,
         )
-        chunks=self.spliter.split_documents([document])
+        chunks=self.spliter.split_documents(documents)
 
         new_store=InMemoryVectorStore(
             embedding=self.embedding
@@ -54,3 +53,44 @@ class KnowledgeService:
             query,
             k=k,
         )
+    def _read_documents(
+            self,
+            filepath: Path,
+            source_name: str | None,
+    )-> list[Document]:
+        source=source_name or filepath.name
+        suffix=filepath.suffix.lower()
+
+        if suffix==".txt":
+            text = filepath.read_text(encoding="utf-8-sig")
+            if not text.strip():
+                raise ValueError("TXT 文件内容为空")
+            return [
+                Document(
+                    page_content=text,
+                    metadata={"source": source},
+                )
+            ]
+        if suffix==".pdf":
+            reader=PdfReader(filepath)
+            documents=[]
+
+            for page_number, page in enumerate(reader.pages, start=1):
+                text = page.extract_text() or ""
+
+                if text.strip():
+                    documents.append(
+                        Document(
+                            page_content=text,
+                            metadata={
+                                "source": source,
+                                "page": page_number,
+                            },
+                        )
+                    )
+
+            if not documents:
+                raise ValueError("PDF 未提取到文字，扫描版需要先进行 OCR")
+            return documents
+        raise ValueError("只支持 TXT 或 PDF")
+
