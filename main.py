@@ -1,6 +1,6 @@
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException,Path
+from fastapi import FastAPI, HTTPException,Path,UploadFile,File
 
 from pydantic import BaseModel, Field
 
@@ -16,6 +16,10 @@ from contextlib import asynccontextmanager
 from app.core.database import Base, engine
 from app.models.conversation import Conversation
 
+from app.core.config import ROOT_DIR
+from app.services.knowledge_service import KnowledgeService
+from app.services.rag_service import RagService
+from uuid import uuid4
 logger=get_logger("api")
 
 @asynccontextmanager
@@ -40,6 +44,10 @@ app=FastAPI(
 chat_service=LLMFactory.create_chat_service()
 
 conversation_service = ConversationService()
+
+knowledge_service = KnowledgeService()
+rag_service = RagService(knowledge_service)
+
 
 logger.info(
     "聊天服务已创建：%s",
@@ -236,4 +244,108 @@ async def rename_conversation(
     return {
         "id": conversation_id,
         "title": title,
+    }
+
+@app.post("/api/knowledge/load")
+async def load_knowledge():
+    filepath=ROOT_DIR/"data"/"机器人测试说明.txt"
+    try:
+        count=await knowledge_service.load_file(filepath)
+    except Exception:
+        logger.exception("知识文件加载失败")
+        raise HTTPException(
+            status_code=500,
+            detail="知识文件加载失败，请查看服务日志",
+        )
+    return {
+        "message": "知识文件加载完成",
+        "source": filepath.name,
+        "chunk_count": count,
+    }
+
+class RagChatRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=2000)
+
+
+@app.post("/api/rag/chat")
+async def rag_chat(request: RagChatRequest):
+    question = request.question.strip()
+
+    if not question:
+        raise HTTPException(
+            status_code=422,
+            detail="问题不能只包含空白",
+        )
+
+    if knowledge_service.vector_store is None:
+        raise HTTPException(
+            status_code=503,
+            detail="知识库尚未准备好，请先加载资料",
+        )
+
+    try:
+        return await rag_service.answer(question)
+    except Exception:
+        logger.exception("RAG 问答失败")
+        raise HTTPException(
+            status_code=502,
+            detail="RAG 问答失败，请查看服务日志",
+        )
+
+@app.post("/api/knowledge/upload")
+async def upload_knowledge(file: UploadFile = File(...)):
+    filename = file.filename or ""
+    # 最多读取 2MB 加一个字节，用来判断是否超限
+    max_size = 2 * 1024 * 1024
+    try:
+        content=await file.read(max_size+1)
+    finally:
+        await file.close()
+
+    if not filename.lower().endswith(".txt"):
+        raise HTTPException(
+            status_code=422,
+            detail="当前只支持 TXT 文件",
+        )
+    if len(content)>max_size:
+        raise HTTPException(
+            status_code=413,
+            detail="文件不能超过 2MB",
+        )
+
+    try:
+        text=content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(
+            status_code=422,
+            detail="请将文件保存为 UTF-8 编码后上传",
+        )
+
+    if not text.strip():
+        raise HTTPException(
+            status_code=422,
+            detail="文件内容不能为空",
+        )
+
+    upload_dir=ROOT_DIR/"uploads"
+    upload_dir.mkdir(exist_ok=True)
+    # 使用服务器生成的文件名，避免同名覆盖
+    filepath=upload_dir / f"{uuid4().hex}.txt"
+
+    try:
+        filepath.write_text(text,encoding="utf-8")
+        count = await knowledge_service.load_file(
+            filepath,
+            source_name=filename,
+        )
+    except Exception:
+        logger.exception("上传资料建库失败")
+        raise HTTPException(
+            status_code=500,
+            detail="资料处理失败，请查看服务日志",
+        )
+    return {
+        "message": "上传并建立知识库成功",
+        "source": filename,
+        "chunk_count": count,
     }
