@@ -6,7 +6,7 @@
 
 ## 1. 当前已经完成什么
 
-选择 TXT 或可提取文字的 PDF，上传后建立内存向量库；提问时检索原文，将问题与资料交给聊天模型，返回回答、文件来源、PDF 页码和参考片段。
+选择 TXT 或可提取文字的 PDF，上传后建立 FAISS 向量库并保存到 `indexes/<index_id>/`；提问时按 index_id 选择资料，检索原文，将问题与资料交给聊天模型，返回回答、文件来源、PDF 页码和参考片段。
 
 这是固定的 RAG 处理流程，暂时没有让 Agent 自主选择检索工具。
 
@@ -44,7 +44,8 @@ flowchart TD
     H --> I
     I --> J["切分片段<br/>split_documents()"]
     J --> K["嵌入并存入新库<br/>await aadd_documents()"]
-    K --> STORE["self.vector_store<br/>当前进程的内存向量库"]
+    K --> STORE["self.vector_store<br/>FAISS 向量库"]
+    STORE --> SAVE["KnowledgeService.save_index()<br/>保存到 indexes/index_id/"]
     K --> OK[返回文件名和片段数]
 
     Q["第二次请求：提问<br/>POST /api/rag/chat"] --> R["main.py：rag_chat()<br/>校验输入与知识库状态"]
@@ -123,8 +124,7 @@ documents = await asyncio.to_thread(
     self._read_documents, filepath, source_name
 )
 chunks = self.spliter.split_documents(documents)
-new_store = InMemoryVectorStore(embedding=self.embedding)
-await new_store.aadd_documents(chunks)
+new_store = await FAISS.afrom_documents(chunks, self.embedding)
 self.vector_store = new_store
 ```
 
@@ -138,7 +138,7 @@ self.vector_store = new_store
   → 新库建立成功后，替换 self.vector_store
 ```
 
-使用 `new_store` 是为了先构建成功再替换，失败时不提前覆盖当前知识库。当前每次加载替换整个库，不是向同一个库追加多份文件。
+使用 `new_store` 是为了先构建成功再赋值。`IndexingService.create_index()` 每次创建独立的 KnowledgeService 和 index_id，然后调用 `save_index()` 保存；不同上传文件互不覆盖。
 
 `aadd_documents()` 是库提供的异步入库方法；`asyncio.to_thread()` 则是让同步文件解析在工作线程执行。两者不是同一种机制，不是任意同步方法前面加 `await` 就能异步。
 
@@ -229,13 +229,13 @@ rag_service = RagService(knowledge_service)
 
 1. POST `/api/knowledge/upload` → Try it out → 选择 TXT 或 PDF → Execute。
 2. 确认返回上传成功和非零片段数量。
-3. POST `/api/rag/chat`，提交 `{"question": "为什么扫地机器人有时会迷路？"}`。
+3. POST `/api/rag/chat`，提交 `{"index_id": "上传返回的index_id", "question": "为什么扫地机器人有时会迷路？"}`。
 4. 核对回答是否能由参考片段支持。
 5. PDF 检查 `references` 中的原文件名和 `page`；TXT 的 `page` 应为 `null`。
 
-代码修改或服务重启会丢失内存向量库，所以需要重新上传。补上来源页码后，也应重载并重新上传，再发起一次问答验证。
+服务重启后内存缓存清空，但磁盘索引保留。使用同一个 index_id 提问时，`IndexingService.get_index()` 会调用 `KnowledgeService.load_index()` 读取，无需重新生成资料向量。此次修改之前创建的内存索引没有存盘，需要重新上传一次。
 
-固定加载接口 `/api/knowledge/load` 是另一种准备资料的方式，只加载 `data/机器人测试说明.txt`；调用它同样会替换当前知识库。
+固定加载接口 `/api/knowledge/load` 是另一种准备资料的方式，只加载 `data/机器人测试说明.txt`，同样返回一个新的 index_id。
 
 ## 11. 与聊天数据库的关系及当前边界
 
@@ -243,18 +243,21 @@ rag_service = RagService(knowledge_service)
 |---|---|---|
 | SQLite 的 conversations / messages 表 | 会话标题和聊天记录 | 已提交数据保留 |
 | uploads/ | 上传文件的原始字节 | 文件保留 |
-| KnowledgeService.vector_store | 当前文件的片段、元数据和向量 | 不保留，需要重新加载 |
+| KnowledgeService.vector_store | 当前文件的 FAISS 向量库内存对象 | 内存对象不保留，按 index_id 从磁盘读取 |
+| indexes/<index_id>/ | index.faiss 保存向量；index.pkl 保存片段、元数据及映射 | 保留 |
 
-当前 `/api/rag/chat` 不读取、保存会话历史，不会自动调用 Agent；也没有多知识库隔离、索引持久化或 OCR。上传失败时磁盘上可能仍留下原始文件，但不代表新库已建立成功。
+当前已支持按 index_id 选择独立索引及索引持久化。`/api/rag/chat` 不读取、保存会话历史，不会自动调用 Agent，也没有 OCR。上传失败时磁盘上可能仍留下原始文件，但不代表新库已建立成功。
+
+`FAISS.load_local(..., allow_dangerous_deserialization=True)` 用于读取本服务生成的 index.pkl；这里只加载服务器自己的索引文件，不提供外部索引文件上传接口。课程使用原生 FAISS 加 JSON；本项目使用 LangChain FAISS 封装加本地保存，保留原来的 Ollama 向量模型。
 
 PDF 的文字提取和小片段切分可能损失布局、表格关系、问题与答案的关联；检索有相关结果也不保证足以回答。提示词要求依据资料，但仍需核对实际输出。
 
-上传前检查 Git 暂存列表，不提交 `.env`、`uploads/`、聊天数据库和缓存。
+上传前检查 Git 暂存列表，不提交 `.env`、`uploads/`、`indexes/`、聊天数据库和缓存。
 
 ## 12. 复习只抓两条路线
 
 ```text
-入库：上传 → 保存文件 → 解析文字 → Document → 切分 → 嵌入 → 内存库
+入库：上传 → 保存文件 → 解析文字 → Document → 切分 → 嵌入 → FAISS → save_index() 存盘
 
 问答：问题 → 相似检索 → 原文与来源 → 组成消息 → 聊天模型 → 回答与参考片段
 ```

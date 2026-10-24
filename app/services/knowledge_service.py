@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from langchain_core.documents import Document
-from langchain_core.vectorstores import InMemoryVectorStore
+from langchain_community.vectorstores import FAISS
 from langchain_ollama import OllamaEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -47,10 +47,7 @@ class KnowledgeService:
         )
         chunks=self.spliter.split_documents(documents)
 
-        new_store=InMemoryVectorStore(
-            embedding=self.embedding
-        )
-        await new_store.aadd_documents(chunks)
+        new_store=await FAISS.afrom_documents(chunks, self.embedding)
         self.vector_store = new_store
         return len(chunks)
 
@@ -62,6 +59,18 @@ class KnowledgeService:
             query,
             k=k,
         )
+
+    def save_index(self, folder: Path) -> None:
+        self.vector_store.save_local(str(folder))
+
+    def load_index(self, folder: Path) -> None:
+        self.vector_store = FAISS.load_local(
+            str(folder),
+            self.embedding,
+            # 只读取本服务 save_index 生成的本地文件。
+            allow_dangerous_deserialization=True,
+        )
+
     def _read_documents(
             self,
             filepath: Path,
