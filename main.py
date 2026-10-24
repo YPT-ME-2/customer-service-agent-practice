@@ -17,7 +17,8 @@ from app.core.database import Base, engine
 from app.models.conversation import Conversation
 
 from app.core.config import ROOT_DIR
-from app.services.knowledge_service import KnowledgeService
+# from app.services.knowledge_service import KnowledgeService
+from app.services.indexing_service import IndexingService
 from app.services.rag_service import RagService
 from uuid import uuid4
 import asyncio
@@ -47,9 +48,9 @@ chat_service=LLMFactory.create_chat_service()
 
 conversation_service = ConversationService()
 
-knowledge_service = KnowledgeService()
-rag_service = RagService(knowledge_service)
-
+# knowledge_service = KnowledgeService()
+# rag_service = RagService(knowledge_service)
+indexing_service=IndexingService()
 
 logger.info(
     "聊天服务已创建：%s",
@@ -248,24 +249,44 @@ async def rename_conversation(
         "title": title,
     }
 
+# @app.post("/api/knowledge/load")
+# async def load_knowledge():
+#     filepath=ROOT_DIR/"data"/"机器人测试说明.txt"
+#     try:
+#         count=await knowledge_service.load_file(filepath)
+#     except Exception:
+#         logger.exception("知识文件加载失败")
+#         raise HTTPException(
+#             status_code=500,
+#             detail="知识文件加载失败，请查看服务日志",
+#         )
+#     return {
+#         "message": "知识文件加载完成",
+#         "source": filepath.name,
+#         "chunk_count": count,
+#     }
+
 @app.post("/api/knowledge/load")
 async def load_knowledge():
-    filepath=ROOT_DIR/"data"/"机器人测试说明.txt"
+    filepath=ROOT_DIR / "data" / "机器人测试说明.txt"
     try:
-        count=await knowledge_service.load_file(filepath)
+        index_info=await indexing_service.create_index(filepath)
     except Exception:
         logger.exception("知识文件加载失败")
         raise HTTPException(
             status_code=500,
             detail="知识文件加载失败，请查看服务日志",
         )
-    return {
-        "message": "知识文件加载完成",
-        "source": filepath.name,
-        "chunk_count": count,
-    }
+
+    return index_info
+#{
+#   "index_id": "生成的编号",
+#   "source": "机器人测试说明.txt",
+#   "chunk_count": 2
+# }
 
 class RagChatRequest(BaseModel):
+    index_id:str=Field(min_length=1)
     question: str = Field(min_length=1, max_length=2000)
 
 
@@ -278,15 +299,16 @@ async def rag_chat(request: RagChatRequest):
             status_code=422,
             detail="问题不能只包含空白",
         )
-
-    if knowledge_service.vector_store is None:
+    knowledge=indexing_service.get_index(request.index_id)
+    
+    if knowledge is None:
         raise HTTPException(
             status_code=503,
             detail="知识库尚未准备好，请先加载资料",
         )
-
+    rag=RagService(knowledge)
     try:
-        return await rag_service.answer(question)
+        return await rag.answer(question)
     except Exception:
         logger.exception("RAG 问答失败")
         raise HTTPException(
@@ -295,7 +317,9 @@ async def rag_chat(request: RagChatRequest):
         )
 
 @app.post("/api/knowledge/upload")
-async def upload_knowledge(file: UploadFile = File(...)):
+async def upload_knowledge(
+    file: UploadFile = File(..., json_schema_extra={"format": "binary"}),
+):
     filename = file.filename or ""
     # 最多读取 2MB 加一个字节，用来判断是否超限
     lower_name=filename.lower()
@@ -355,10 +379,15 @@ async def upload_knowledge(file: UploadFile = File(...)):
     try:
         # filepath.write_text(text,encoding="utf-8")
         await asyncio.to_thread(filepath.write_bytes, content)
-        count = await knowledge_service.load_file(
+        # count = await knowledge_service.load_file(
+        #     filepath,
+        #     source_name=filename,
+        # )
+        index_info=await indexing_service.create_index(
             filepath,
             source_name=filename,
         )
+
     except (ValueError, UnicodeDecodeError) as e:
         raise HTTPException(
             status_code=422,
@@ -370,8 +399,9 @@ async def upload_knowledge(file: UploadFile = File(...)):
             status_code=500,
             detail="资料处理失败，请查看服务日志",
         )
-    return {
-        "message": "上传并建立知识库成功",
-        "source": filename,
-        "chunk_count": count,
-    }
+    # return {
+    #     "message": "上传并建立知识库成功",
+    #     "source": filename,
+    #     "chunk_count": count,
+    # }
+    return index_info
