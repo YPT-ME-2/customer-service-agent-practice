@@ -22,15 +22,18 @@ class RagService:
 
         for number,doc in enumerate(docs,start=1):
             source=doc.metadata.get("source", "未知来源")
+            page = doc.metadata.get("page")
+            location = f"，第{page}页" if page is not None else ""
 
             reference_parts.append(
-                f"【资料{number}】来源：{source}\n"
+                f"【资料{number}】来源：{source}{location}\n"
                 f"{doc.page_content}"
             )
 
             references.append({
                 "number": number,
                 "source": source,
+                "page": page,
                 "content": doc.page_content,
             })
         context="\n\n".join(reference_parts)

@@ -31,7 +31,16 @@ class KnowledgeService:
             filepath:Path,
             source_name:str|None=None,
             )->int:
-        documents = await asyncio.to_thread(
+        # text=filepath.read_text(encoding="utf-8")
+
+        # if not text.strip():
+        #     raise ValueError("知识文件内容为空")
+        # document=Document(
+        #     page_content=text,
+        #     # metadata={"source": filepath.name},
+        #     metadata={"source": source_name or filepath.name}
+        # )
+        documents=await asyncio.to_thread(
             self._read_documents,
             filepath,
             source_name,
