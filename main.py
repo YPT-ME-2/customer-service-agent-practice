@@ -19,6 +19,7 @@ from app.models.conversation import Conversation
 from app.core.config import ROOT_DIR
 # from app.services.knowledge_service import KnowledgeService
 from app.services.indexing_service import IndexingService
+from app.services.agent_service import AgentService
 from app.services.rag_service import RagService
 from uuid import uuid4
 import asyncio
@@ -51,6 +52,8 @@ conversation_service = ConversationService()
 # knowledge_service = KnowledgeService()
 # rag_service = RagService(knowledge_service)
 indexing_service=IndexingService()
+
+agent_service=AgentService(indexing_service)
 
 logger.info(
     "聊天服务已创建：%s",
@@ -315,6 +318,31 @@ async def rag_chat(request: RagChatRequest):
             status_code=502,
             detail="RAG 问答失败，请查看服务日志",
         )
+
+class AgentChatRequest(BaseModel):
+    index_id:str=Field(min_length=1)
+    question: str = Field(min_length=1, max_length=2000)
+
+@app.post("/api/agent/chat")
+async def agent_chat(request: AgentChatRequest):
+    question = request.question.strip()
+    if not question:
+        raise HTTPException(
+            status_code=422,
+            detail="问题不能只包含空白",
+        )
+    try:
+        answer=await agent_service.answer(
+            question=question,
+            index_id=request.index_id,
+        )
+    except Exception:
+        logger.exception("Agent 问答失败")
+        raise HTTPException(
+            status_code=502,
+            detail="Agent 问答失败，请查看服务日志",
+        )
+    return {"answer": answer}
 
 @app.post("/api/knowledge/upload")
 async def upload_knowledge(

@@ -33,6 +33,30 @@ class OllamaService:
 
                 return result["message"]["content"]
 
+    async def generate_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],)->dict:
+        timeout=aiohttp.ClientTimeout(total=300)
+        async with aiohttp.ClientSession(
+            timeout=timeout,
+            trust_env=False,
+        ) as session:
+            async with session.post(
+                f"{self.base_url}/api/chat",
+                json={
+                    "model": self.chat_model,
+                    "messages": messages,
+                    "tools": tools,
+                    "stream": False,
+                    "think": False,
+                },
+            ) as response:
+                response.raise_for_status()
+                result=await response.json()
+
+                return result["message"]
+
     async def generate_stream(self,messages:list[dict[str,str]]):
         timeout =aiohttp.ClientTimeout(total=300)
         async with aiohttp.ClientSession(
