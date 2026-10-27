@@ -19,7 +19,8 @@ from app.models.conversation import Conversation
 from app.core.config import ROOT_DIR
 # from app.services.knowledge_service import KnowledgeService
 from app.services.indexing_service import IndexingService
-from app.services.agent_service import AgentService
+# from app.services.agent_service import AgentService
+from app.services.graph_service import graph_answer
 from app.services.rag_service import RagService
 from uuid import uuid4
 import asyncio
@@ -53,7 +54,7 @@ conversation_service = ConversationService()
 # rag_service = RagService(knowledge_service)
 indexing_service=IndexingService()
 
-agent_service=AgentService(indexing_service)
+# agent_service=AgentService(indexing_service)
 
 logger.info(
     "聊天服务已创建：%s",
@@ -332,10 +333,15 @@ async def agent_chat(request: AgentChatRequest):
             detail="问题不能只包含空白",
         )
     try:
-        answer=await agent_service.answer(
+        # answer=await agent_service.answer(
+        #     question=question,
+        #     index_id=request.index_id,
+        # )
+        answer=await graph_answer(
             question=question,
             index_id=request.index_id,
         )
+
     except Exception:
         logger.exception("Agent 问答失败")
         raise HTTPException(
