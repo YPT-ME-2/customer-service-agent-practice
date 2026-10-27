@@ -11,6 +11,7 @@ from langgraph.config import get_stream_writer
 class State(TypedDict):
     messages: list[dict]
     index_id: str
+    image: bytes | None
 
 chat=OllamaService()
 indexes=IndexingService()
@@ -75,11 +76,52 @@ async def tool_node(state: State) -> dict:
         })
     return {"messages": messages}
 
+
+async def image_node(state: State) -> dict:
+    print("执行：图片节点")
+
+    question = state["messages"][-1]["content"]
+    answer = await chat.generate_with_image(
+        question,
+        state["image"],
+    )
+
+    writer = get_stream_writer()
+    writer(answer)
+
+    return {
+        "messages": state["messages"] + [
+            {"role": "assistant", "content": answer}
+        ]
+    }
+
+
+def route_entry(state: State) -> str:
+    if state.get("image"):
+        return "image"
+
+    return "model"
+
+
 builder = StateGraph(State)
 builder.add_node("model", model_node)
 builder.add_node("tools", tool_node)
 
-builder.add_edge(START, "model")
+# builder.add_edge(START, "model")
+
+builder.add_node("image", image_node)
+
+builder.add_conditional_edges(
+    START,
+    route_entry,
+    {
+        "image": "image",
+        "model": "model",
+    },
+)
+
+builder.add_edge("image", END)
+
 builder.add_conditional_edges(
     "model", next_step, {"tools": "tools", "end": END}
 )
@@ -119,7 +161,14 @@ def build_messages(
         {
             "role": "system",
             "content": (
-                "你是机器人客服。针对产品的具体故障、参数和维护信息，必须先调用知识库工具。"
+                "你是机器人客服。先结合聊天历史判断信息是否足够。"
+                "如果用户只说机器人坏了、不能用了等，没有明确故障现象或错误代码，"
+                "且历史也未提供这些信息，只追问一个最关键的缺失信息，"
+                "例如“具体出现了什么现象，或显示了什么错误代码？”；"
+                "此时不调用检索工具，不提供充电、重启等排查步骤。"
+                "如果当前问题或历史已提供错误代码或明确现象，直接据此检索，"
+                "不要因缺少非必要信息反复追问。"
+                "针对信息明确的产品故障、参数和维护问题，必须先调用知识库工具。"
                 "只有检索资料明确支持的内容才能作为产品事实回答，不能使用常识猜测。"
                 "用户问某个故障代码时，核对资料是否明确包含同一个代码及其说明；"
                 "其他代码的资料不能用于解释当前代码。"
@@ -149,10 +198,12 @@ async def graph_answer(
     question: str,
     index_id: str,
     history: list[dict] | None = None,
+    image: bytes | None = None,
 ) -> str:
     result = await graph.ainvoke({
         "messages": build_messages(question, history),
         "index_id": index_id,
+        "image": image,
     })
     return result["messages"][-1]["content"]
 
@@ -161,11 +212,13 @@ async def graph_answer_stream(
     question: str,
     index_id: str,
     history: list[dict] | None = None,
+    image: bytes | None = None,
 ):
     async for text in graph.astream(
         {
             "messages": build_messages(question, history),
             "index_id": index_id,
+            "image": image,
         },
         stream_mode="custom",
     ):

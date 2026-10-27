@@ -5,6 +5,8 @@ import json
 from app.core.config import settings
 from app.core.logger import get_logger
 
+import  base64
+
 logger=get_logger("ollama")
 
 
@@ -13,7 +15,7 @@ class OllamaService:
         self.base_url=settings.OLLAMA_BASE_URL.rstrip("/")
         self.chat_model=settings.OLLAMA_CHAT_MODEL
 
-    async def generate(self,messages:list[dict[str, str]]) -> str:
+    async def generate(self,messages:list[dict]) -> str:
         timeout = aiohttp.ClientTimeout(total=300)
         async with aiohttp.ClientSession(
             timeout=timeout,
@@ -32,6 +34,30 @@ class OllamaService:
                 result = await response.json()
 
                 return result["message"]["content"]
+
+    async def generate_with_image(
+        self,
+        question: str,
+        image: bytes,            
+    )->str:
+        image_data = base64.b64encode(image).decode("ascii")
+
+        return await self.generate([
+            {
+                "role": "system",
+                "content": (
+                    "请根据图片中可见的内容回答问题。"
+                    "看不清的文字、品牌和型号请明确说明，不能猜测。"
+                    "不要仅凭外观断定内部故障。"
+                ),
+            },
+             {
+                "role": "user",
+                "content": question,
+                "images": [image_data],
+            },
+        ])
+    
 
     async def generate_with_tools(
         self,

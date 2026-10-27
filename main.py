@@ -1,6 +1,6 @@
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException,Path,UploadFile,File
+from fastapi import FastAPI, HTTPException,Path,UploadFile,File,Form
 
 from pydantic import BaseModel, Field
 
@@ -24,6 +24,8 @@ from app.services.graph_service import graph_answer, graph_answer_stream
 from app.services.rag_service import RagService
 from uuid import uuid4
 import asyncio
+
+
 
 logger=get_logger("api")
 
@@ -498,3 +500,48 @@ async def upload_knowledge(
     #     "chunk_count": count,
     # }
     return index_info
+
+
+@app.post("/api/chat/image")
+async def image_chat(
+    file: UploadFile = File(
+        ...,
+        json_schema_extra={"format": "binary"},
+    ),
+    question:str = Form("请描述图片中可见的设备及其外观。"),
+):
+    if file.content_type not in {"image/jpeg", "image/png"}:
+        await file.close()
+        raise HTTPException(
+            status_code=422,
+            detail="请上传 JPG 或 PNG 图片",
+        )
+
+    max_size = 10 * 1024 * 1024
+
+    try:
+        image=await file.read(max_size+1)
+    finally:
+        await file.close()
+
+    if not image or len(image) > max_size:
+        raise HTTPException(
+            status_code=422,
+            detail="图片不能为空，且不能超过10MB",
+        )
+
+    try:
+        # answer = await chat_service.generate_with_image(question, image)
+        answer = await graph_answer(
+            question=question,
+            index_id="",
+            image=image,
+        )
+    except Exception:
+        logger.exception("图片问答失败")
+        raise HTTPException(
+            status_code=502,
+            detail="图片问答失败，请查看服务日志",
+        )
+
+    return {"answer": answer}
