@@ -20,7 +20,7 @@ from app.core.config import ROOT_DIR
 # from app.services.knowledge_service import KnowledgeService
 from app.services.indexing_service import IndexingService
 # from app.services.agent_service import AgentService
-from app.services.graph_service import graph_answer
+from app.services.graph_service import graph_answer, graph_answer_stream
 from app.services.rag_service import RagService
 from uuid import uuid4
 import asyncio
@@ -363,6 +363,51 @@ async def agent_chat(request: AgentChatRequest):
         "conversation_id": request.conversation_id,
         "answer": answer
         }
+
+
+
+@app.post("/api/agent/chat/stream")
+async def agent_chat_stream(request: AgentChatRequest):
+    question = request.question.strip()
+
+    if not question:
+        raise HTTPException(
+            status_code=422,
+            detail="问题不能只包含空白",
+        )
+
+    history = await conversation_service.get_history(
+        request.conversation_id
+    )
+
+    async def generate():
+        parts = []
+
+        try:
+            async for text in graph_answer_stream(
+                question=question,
+                index_id=request.index_id,
+                history=history,
+            ):
+                parts.append(text)
+                yield text
+
+            # 流正常结束后，保存用户看到的完整输出。
+            await conversation_service.save_turn(
+                request.conversation_id,
+                question,
+                "".join(parts),
+            )
+        except Exception:
+            logger.exception("Agent 流式问答失败")
+            raise
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/plain; charset=utf-8",
+    )
+
+
 
 @app.post("/api/knowledge/upload")
 async def upload_knowledge(

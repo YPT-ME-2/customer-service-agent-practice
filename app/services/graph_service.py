@@ -6,7 +6,7 @@ from langgraph.graph import StateGraph, START, END
 from app.services.ollama_service import OllamaService
 from app.services.indexing_service import IndexingService
 from tools.definitions import SEARCH_TOOL
-
+from langgraph.config import get_stream_writer
 
 class State(TypedDict):
     messages: list[dict]
@@ -19,7 +19,28 @@ tools = [{"type": "function", "function": SEARCH_TOOL}]
 # 节点一：请求模型，保留它的回复或工具请求。
 async def model_node(state: State) -> dict:
     print("执行：模型节点")
-    message = await chat.generate_with_tools(state["messages"], tools)
+    # message = await chat.generate_with_tools(state["messages"], tools)
+    # return {"messages": state["messages"] + [message]}
+    writer=get_stream_writer()
+
+    message={
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [],
+    }
+    async for part in chat.generate_with_tools_stream(
+        state["messages"],
+        tools,
+    ):
+        content=part.get("content", "")
+
+        if content:
+            message["content"] += content
+            writer(content)
+
+        if part.get("tool_calls"):
+            message["tool_calls"].extend(part["tool_calls"])
+
     return {"messages": state["messages"] + [message]}
 
 # 路由：模型请求工具就继续，否则结束。
@@ -86,11 +107,14 @@ graph = builder.compile()
 #     })
 #     return result["messages"][-1]["content"]
 
-async def graph_answer(
+# async def graph_answer(
+#     question: str,
+#     history: list[dict] | None = None,
+# ) -> list[dict]:
+def build_messages(
     question: str,
-    index_id: str,
     history: list[dict] | None = None,
-) -> str:
+) -> list[dict]:
     messages = [
         {
             "role": "system",
@@ -112,9 +136,37 @@ async def graph_answer(
         "role": "user",
         "content": question,
     })
+    # result = await graph.ainvoke({
+    #     "messages": messages,
+    #     "index_id": index_id,
+    # })
+
+    # return result["messages"][-1]["content"]
+    return messages
+
+
+async def graph_answer(
+    question: str,
+    index_id: str,
+    history: list[dict] | None = None,
+) -> str:
     result = await graph.ainvoke({
-        "messages": messages,
+        "messages": build_messages(question, history),
         "index_id": index_id,
     })
-
     return result["messages"][-1]["content"]
+
+
+async def graph_answer_stream(
+    question: str,
+    index_id: str,
+    history: list[dict] | None = None,
+):
+    async for text in graph.astream(
+        {
+            "messages": build_messages(question, history),
+            "index_id": index_id,
+        },
+        stream_mode="custom",
+    ):
+        yield text

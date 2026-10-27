@@ -57,6 +57,43 @@ class OllamaService:
 
                 return result["message"]
 
+    async def generate_with_tools_stream(
+        self,
+        messages: list[dict],
+        tools: list[dict],    
+    ):
+        timeout=aiohttp.ClientTimeout(total=300)
+
+        async with aiohttp.ClientSession(
+            timeout=timeout,
+            trust_env=False,
+        ) as session:
+            async with session.post(
+                f"{self.base_url}/api/chat",
+                json={
+                    "model": self.chat_model,
+                    "messages": messages,
+                    "tools": tools,
+                    "stream": True,
+                    "think": False,
+                },
+            ) as response:
+                response.raise_for_status()
+                async for line in response.content:
+                    if not line.strip():
+                        continue
+                    chunk = json.loads(line)
+
+                    if chunk.get("error"):
+                        raise RuntimeError(chunk["error"])
+
+                    message = chunk.get("message")
+                    if message:
+                        yield message
+
+                    if chunk.get("done"):
+                        break
+
     async def generate_stream(self,messages:list[dict[str,str]]):
         timeout =aiohttp.ClientTimeout(total=300)
         async with aiohttp.ClientSession(
