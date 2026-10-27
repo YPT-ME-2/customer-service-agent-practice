@@ -321,6 +321,7 @@ async def rag_chat(request: RagChatRequest):
         )
 
 class AgentChatRequest(BaseModel):
+    conversation_id: str = Field(min_length=1, max_length=64)
     index_id:str=Field(min_length=1)
     question: str = Field(min_length=1, max_length=2000)
 
@@ -337,9 +338,19 @@ async def agent_chat(request: AgentChatRequest):
         #     question=question,
         #     index_id=request.index_id,
         # )
+        history=await conversation_service.get_history(
+            request.conversation_id
+        )
+
         answer=await graph_answer(
             question=question,
             index_id=request.index_id,
+            history=history,
+        )
+        await conversation_service.save_turn(
+            request.conversation_id,
+            question,
+            answer,
         )
 
     except Exception:
@@ -348,7 +359,10 @@ async def agent_chat(request: AgentChatRequest):
             status_code=502,
             detail="Agent 问答失败，请查看服务日志",
         )
-    return {"answer": answer}
+    return {
+        "conversation_id": request.conversation_id,
+        "answer": answer
+        }
 
 @app.post("/api/knowledge/upload")
 async def upload_knowledge(
