@@ -12,6 +12,12 @@ class Settings(BaseSettings):
     DEEPSEEK_API_KEY: str = ""
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
     DEEPSEEK_MODEL: str = "deepseek-flash"
+
+    NEO4J_URL: str = "neo4j://127.0.0.1:7687"
+    NEO4J_USERNAME: str = "neo4j"
+    NEO4J_PASSWORD: str = ""
+    NEO4J_DATABASE: str = "neo4j"
+    
     model_config = SettingsConfigDict(
         env_file=ROOT_DIR / ".env",
         env_file_encoding="utf-8",

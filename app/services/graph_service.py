@@ -5,8 +5,11 @@ from langgraph.graph import StateGraph, START, END
 
 from app.services.ollama_service import OllamaService
 from app.services.indexing_service import IndexingService
-from tools.definitions import SEARCH_TOOL
+from tools.definitions import SEARCH_TOOL, ORDER_SUPPLIER_TOOL
 from langgraph.config import get_stream_writer
+import json
+
+from app.services.neo4j_service import Neo4jService
 
 class State(TypedDict):
     messages: list[dict]
@@ -15,7 +18,15 @@ class State(TypedDict):
 
 chat=OllamaService()
 indexes=IndexingService()
-tools = [{"type": "function", "function": SEARCH_TOOL}]
+# tools = [{"type": "function", "function": SEARCH_TOOL}]
+neo4j_service = Neo4jService()
+
+tools = [
+    {"type": "function", "function": SEARCH_TOOL},
+    {"type": "function", "function": ORDER_SUPPLIER_TOOL},
+]
+
+
 
 # 节点一：请求模型，保留它的回复或工具请求。
 async def model_node(state: State) -> dict:
@@ -54,21 +65,38 @@ def next_step(state: State) -> str:
 async def tool_node(state: State) -> dict:
     print("执行：检索节点")
     messages = state["messages"].copy()
-    knowledge=indexes.get_index(state["index_id"])
+    # knowledge=indexes.get_index(state["index_id"])
 
-    if knowledge is None:
-        raise ValueError("找不到知识库，请检查 index_id")
+    # if knowledge is None:
+    #     raise ValueError("找不到知识库，请检查 index_id")
 
     for call in messages[-1]["tool_calls"]:
         function=call["function"]
-        if function["name"] != "search_knowledge":
-            raise ValueError("不支持的工具")
+        name = function["name"]
+        arguments = function["arguments"]
 
-        docs = await knowledge.search(function["arguments"]["query"])
-        context = "\n\n".join(
-            f"来源：{doc.metadata.get('source')}\n内容：{doc.page_content}"
-            for doc in docs
-        )
+        print("执行工具：", name, arguments)
+
+        if name =="search_knowledge":
+            knowledge=indexes.get_index(state["index_id"])
+
+            if knowledge is None:
+                raise ValueError("找不到知识库，请检查 index_id")
+            docs = await knowledge.search(arguments["query"])            
+            context = "\n\n".join(
+                f"来源：{doc.metadata.get('source')}\n内容：{doc.page_content}"
+                f"内容：{doc.page_content}"
+                for doc in docs
+            )
+
+        elif name== "query_order_supplier":
+            rows=await neo4j_service.get_order_supplier(
+                arguments["order_id"]
+            )
+            context=json.dumps(rows,ensure_ascii=False)
+
+        else:
+            raise ValueError(f"不支持的工具：{name}")
         messages.append({
             "role": "tool",
             "tool_name": function["name"],
@@ -175,6 +203,8 @@ def build_messages(
                 "如果资料未说明，直接回答“当前知识库没有该问题的明确说明，无法确认”，"
                 "不要编造原因、数值或处理步骤，也不要为同一问题反复检索。"
                 "普通问候直接回答；用户昵称等个人信息根据聊天历史回答。"
+                "查询订单包含的商品及其供应商时，必须调用 query_order_supplier。"
+                "缺少订单号时先询问；查询无记录时明确说明未查到，不编造订单信息。"
             ),
         },
     ]
