@@ -27,3 +27,23 @@ ORDER_SUPPLIER_TOOL = {
         "required": ["order_id"],
     },
 }
+
+GRAPH_QUERY_TOOL = {
+    "name": "query_graph",
+    "description": (
+        "查询订单、商品和供应商之间的关系，"
+        "例如某供应商供应哪些商品、某商品属于哪些订单。"
+        "按订单号查询商品及供应商时，优先使用 query_order_supplier。"
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "question": {
+                "type": "string",
+                "description": "包含查询对象和条件的完整问题",
+            }
+        },
+        "required": ["question"],
+    },
+}
+

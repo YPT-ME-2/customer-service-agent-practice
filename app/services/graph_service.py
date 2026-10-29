@@ -5,7 +5,7 @@ from langgraph.graph import StateGraph, START, END
 
 from app.services.ollama_service import OllamaService
 from app.services.indexing_service import IndexingService
-from tools.definitions import SEARCH_TOOL, ORDER_SUPPLIER_TOOL
+from tools.definitions import SEARCH_TOOL, ORDER_SUPPLIER_TOOL,GRAPH_QUERY_TOOL
 from langgraph.config import get_stream_writer
 import json
 
@@ -24,6 +24,7 @@ neo4j_service = Neo4jService()
 tools = [
     {"type": "function", "function": SEARCH_TOOL},
     {"type": "function", "function": ORDER_SUPPLIER_TOOL},
+    {"type": "function", "function": GRAPH_QUERY_TOOL},
 ]
 
 
@@ -94,6 +95,19 @@ async def tool_node(state: State) -> dict:
                 arguments["order_id"]
             )
             context=json.dumps(rows,ensure_ascii=False)
+
+        elif  name== "query_graph":
+            query = await neo4j_service.generate_cypher(
+                arguments["question"]
+            )
+            query = query.strip()
+            print("生成的 Cypher：", query)
+
+            if query=="UNSUPPORTED":
+                context = "当前图数据库结构不支持这个问题，请明确说明无法查询。"
+            else:
+                rows = await neo4j_service.execute_cypher(query)
+                context = json.dumps(rows, ensure_ascii=False)
 
         else:
             raise ValueError(f"不支持的工具：{name}")
@@ -205,6 +219,10 @@ def build_messages(
                 "普通问候直接回答；用户昵称等个人信息根据聊天历史回答。"
                 "查询订单包含的商品及其供应商时，必须调用 query_order_supplier。"
                 "缺少订单号时先询问；查询无记录时明确说明未查到，不编造订单信息。"
+                "查询供应商提供哪些商品、商品关联哪些订单等其他图谱关系时，调用 query_graph。"
+                "图查询返回空列表时，说明本次未查到匹配记录，不编造结果。"
+                "用户已经给出的供应商名称应完整保留并作为查询条件，包括名称中的“示例”字样；"
+                "不要因名称看似示例而要求再次提供。"
             ),
         },
     ]

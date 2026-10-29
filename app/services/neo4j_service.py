@@ -72,13 +72,20 @@ SUPPLIED_BY：Product -> Supplier。
 查询：MATCH (p:Product)-[:SUPPLIED_BY]->(s:Supplier {CompanyName: '供应商甲'}) RETURN p.ProductName LIMIT 20
 
 实际查询必须使用当前问题中的条件，不要照搬示例的订单号或供应商名。
+支持范围判断：只有问题需要的节点、关系或属性不在上述结构中时，才输出 UNSUPPORTED。
+按 Supplier.CompanyName 筛选并返回 Product.ProductName，是现有结构明确支持的查询。
+不知道某个具体名称是否存在于数据库，不代表结构不支持；应该生成查询，让数据库返回记录或空列表。
+用户提供的名称即使包含“示例”等字样，也应当作实际查询条件，不要把它当成提示词占位符。
 """,
+
             },
             {
                 "role": "user",
                 "content": question,
             }
-        ])
+        ],
+        options={"temperature": 0}
+        )
 
     async def execute_cypher(self,query:str) -> list[dict]:
         query=query.strip()

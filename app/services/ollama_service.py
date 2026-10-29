@@ -15,7 +15,11 @@ class OllamaService:
         self.base_url=settings.OLLAMA_BASE_URL.rstrip("/")
         self.chat_model=settings.OLLAMA_CHAT_MODEL
 
-    async def generate(self,messages:list[dict]) -> str:
+    async def generate(
+            self,
+            messages:list[dict],
+            options:dict|None=None,
+            ) -> str:
         timeout = aiohttp.ClientTimeout(total=300)
         async with aiohttp.ClientSession(
             timeout=timeout,
@@ -28,6 +32,7 @@ class OllamaService:
                     "messages": messages,
                     "stream": False,
                     "think": False,
+                    "options": options or {},
                 },
             ) as response:
                 response.raise_for_status()
