@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     NEO4J_USERNAME: str = "neo4j"
     NEO4J_PASSWORD: str = ""
     NEO4J_DATABASE: str = "neo4j"
+
+    NEO4J_READ_USERNAME: str = "agent_reader"
+    NEO4J_READ_PASSWORD: str = ""
     
     model_config = SettingsConfigDict(
         env_file=ROOT_DIR / ".env",
